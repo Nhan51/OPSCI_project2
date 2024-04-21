@@ -256,8 +256,8 @@ services:
     depends_on:
       kafka:
         condition: service_started
-      #stock-consumer:
-       #  condition: service_healthy
+      stock-consumer:
+        condition: service_healthy
 
 volumes:
   strapi-data:
