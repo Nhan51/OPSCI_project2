@@ -1,0 +1,270 @@
+version: "3"
+
+services:
+  strapi:
+    container_name: strapi
+    build: ./strapi-app/
+    image: strapi:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_CLIENT: ${DATABASE_CLIENT}
+      DATABASE_HOST: strapiDB
+      DATABASE_PORT: ${DATABASE_PORT}
+      DATABASE_NAME: ${DATABASE_NAME}
+      DATABASE_USERNAME: ${DATABASE_USERNAME}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET}
+      APP_KEYS: ${APP_KEYS}
+    volumes:
+      - ./strapi-app/config:/opt/app/config
+      - ./strapi-app/src:/opt/app/src
+      - ./strapi-app/package.json:/opt/package.json
+      - ./strapi-app/yarn.lock:/opt/yarn.lock
+      - ./strapi-app/.env:/opt/app/.env
+      - ./strapi-app/public/uploads:/opt/app/public/uploads
+    ports:
+      - "1337:1337"
+    networks:
+      - strapi
+    depends_on:
+      - strapiDB
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:1337"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  strapiDB:
+    container_name: strapiDB
+    restart: unless-stopped
+    env_file: .env
+    image: postgres:12.0-alpine
+    environment:
+      POSTGRES_USER: ${DATABASE_USERNAME}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
+      POSTGRES_DB: ${DATABASE_NAME}
+    volumes:
+      - strapi-data:/var/lib/postgresql/data/ #using a volume
+      - strapi-db-data:/usr/src/app/data
+      #- ./data:/var/lib/postgresql/data/ # if you want to use a bind folder
+    ports:
+      - "5432:5432"
+    networks:
+      - strapi
+
+  front-end:
+    build:
+      context: ./opsci-strapi-frontend/
+      dockerfile: Dockerfile
+    ports:
+      - '5173:5173'
+    env_file: ./strapi-app/.env
+    depends_on:
+      - strapi
+    volumes:
+      - strapi-db-data:/usr/src/app/data
+    networks:
+      - strapi
+
+  zookeeper:
+    container_name: zookeeper
+    image: wurstmeister/zookeeper
+    ports:
+      - '2181:2181'
+    networks:
+        - kafka-network
+
+  kafka:
+    image: wurstmeister/kafka:2.11-1.1.1
+    container_name: kafka
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_ADVERTISED_LISTENERS: INSIDE://localhost:9093,OUTSIDE://kafka:9092,
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_DELETE_TOPIC_ENABLE: "true"
+      KAFKA_ADVERTISED_PORT: 9092
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKAJS_NO_PARTITIONER_WARNING: "1" 
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INSIDE:PLAINTEXT,OUTSIDE:PLAINTEXT
+      KAFKA_LISTENERS: INSIDE://0.0.0.0:9093,OUTSIDE://0.0.0.0:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: INSIDE
+      KAFKA_NO_LISTENER_AUTHENTICATION_PLAINTEXT: "true"
+      KAFKA_NO_LISTENER_AUTHENTICATION_SSL: "true"
+      KAFKA_BROKER_ID: 1
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_RETENTION_BYTES: 1073741824
+      KAFKA_LOG_DIRS: /kafka/logs
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      zookeeper:
+        condition: service_started
+      strapi:
+        condition: service_healthy
+  
+    networks:
+        - kafka-network
+
+  product-consumer:
+    container_name: product-consumer
+    image: arthurescriou/product-consumer:1.0.3 
+    env_file: .env
+    environment:
+      BROKER_1: ${BROKER_1}
+      BROKER_2: ${BROKER_2}
+      BROKER_3: ${BROKER_3}
+      STRAPI_TOKEN: ${STRAPI_TOKEN} 
+      STRAPI_URL: ${STRAPI_URL} 
+      TOPIC: ${TOPIC}
+      ERROR_TOPIC: ${ERROR_TOPIC}
+      BEGINNING: ${BEGINNING}
+    networks:
+      - kafka-network
+      - strapi
+    depends_on:
+      kafka:
+        condition: service_started
+    healthcheck:
+      # On met un délai de 5 secondes avant que producer ne démarre pour éviter des conflits
+      test: ["CMD-SHELL", "exit 0"]
+      start_period: 10s
+      interval: 5s
+      timeout: 10s
+      retries: 5
+
+  product-producer:
+    container_name: product-producer
+    image: arthurescriou/product-producer:1.0.0
+    #build:
+    #  context: ./product-producer/
+    #  dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      BROKER_1: ${BROKER_1}
+      BROKER_2: ${BROKER_2}
+      BROKER_3: ${BROKER_3}
+      STRAPI_TOKEN: ${STRAPI_TOKEN} 
+      STRAPI_URL: ${STRAPI_URL} 
+      TOPIC: ${TOPIC}
+      ERROR_TOPIC: ${ERROR_TOPIC}
+      FILE_NAME: ${FILE_NAME}
+      BEGINNING: ${BEGINNING}
+    volumes:
+      - /home/christian/Documents/l3/opsci/projet2/perso/products.csv:/products.csv
+    networks:
+      - kafka-network
+      - strapi 
+    depends_on:
+      product-consumer:
+        condition: service_healthy
+
+
+  event-producer:
+    container_name: event-producer
+    image: arthurescriou/event-producer:1.0.3
+    env_file: .env
+    environment:
+      BROKER_1: ${BROKER_1}
+      BROKER_2: ${BROKER_2}
+      BROKER_3: ${BROKER_3}
+      TOPIC: ${TOPIC} 
+      FILE_NAME: ${EVENT_FILE_NAME}
+      ERROR_TOPIC: ${ERROR_TOPIC}
+    volumes:
+      - /home/christian/Documents/l3/opsci/projet2/perso/events.csv:/events.csv
+    networks:
+      - kafka-network
+      - strapi
+    depends_on:
+      event-consumer:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+
+  event-consumer:
+    container_name: event-consumer
+    image: arthurescriou/event-consumer:1.0.0
+    env_file: .env
+    environment:
+      BROKER_1: ${BROKER_1}
+      BROKER_2: ${BROKER_2}
+      BROKER_3: ${BROKER_3}
+      STRAPI_TOKEN: ${STRAPI_TOKEN} 
+      STRAPI_URL: ${STRAPI_URL} 
+      TOPIC: ${TOPIC}
+      BEGINNING: ${BEGINNING}
+      ERROR_TOPIC: ${ERROR_TOPIC}
+    networks:
+      - kafka-network
+      - strapi 
+    depends_on:
+      kafka:
+        condition: service_started
+    healthcheck:
+      # On met un délai de 5 secondes avant que producer ne démarre pour éviter des conflits
+      test: ["CMD-SHELL", "exit 0"]
+      start_period: 10s
+      interval: 5s
+      timeout: 10s
+      retries: 5
+
+  stock-consumer:
+    container_name: stock-consumer
+    image: arthurescriou/stock-consumer:1.0.0
+    env_file: .env
+    environment:
+      BROKER_1: ${BROKER_1}
+      BROKER_2: ${BROKER_2}
+      BROKER_3: ${BROKER_3}
+      STRAPI_TOKEN: ${STRAPI_TOKEN} 
+      STRAPI_URL: ${STRAPI_URL} 
+      TOPIC: ${TOPIC_STOCK}
+      BEGINNING: ${BEGINNING}
+      ERROR_TOPIC: ${ERROR_TOPIC}
+    networks:
+      - kafka-network
+      - strapi 
+    healthcheck:
+      # On met un délai de 5 secondes avant que producer ne démarre pour éviter des conflits
+      test: ["CMD-SHELL", "exit 0"]
+      start_period: 10s
+      interval: 5s
+      timeout: 10s
+      retries: 5
+    depends_on:
+      kafka:
+        condition: service_started
+
+  stock-producer:
+    container_name: stock-producer
+    image: arthurescriou/stock-producer:1.0.1
+    env_file: .env
+    environment:
+      BROKER_1: ${BROKER_1}
+      BROKER_2: ${BROKER_2}
+      BROKER_3: ${BROKER_3}
+      TOPIC: ${TOPIC_STOCK}
+      FILE_NAME: ${STOCK_FILE_NAME}
+    networks:
+      - kafka-network
+      - strapi 
+    depends_on:
+      kafka:
+        condition: service_started
+      #stock-consumer:
+       #  condition: service_healthy
+
+volumes:
+  strapi-data:
+  strapi-db-data:
+
+networks:
+  strapi:
+    driver: bridge
+  kafka-network:
+    driver: bridge
