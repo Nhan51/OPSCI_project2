@@ -155,7 +155,7 @@ services:
       FILE_NAME: ${FILE_NAME}
       BEGINNING: ${BEGINNING}
     volumes:
-      - /home/christian/Documents/l3/opsci/projet2/perso/products.csv:/products.csv
+      - /home/christian/Documents/l3/opsci/projet2/products.csv:/products.csv
     networks:
       - kafka-network
       - strapi 
@@ -176,7 +176,7 @@ services:
       FILE_NAME: ${EVENT_FILE_NAME}
       ERROR_TOPIC: ${ERROR_TOPIC}
     volumes:
-      - /home/christian/Documents/l3/opsci/projet2/perso/events.csv:/events.csv
+      - /home/christian/Documents/l3/opsci/projet2/events.csv:/events.csv
     networks:
       - kafka-network
       - strapi
@@ -208,14 +208,16 @@ services:
     healthcheck:
       # On met un délai de 5 secondes avant que producer ne démarre pour éviter des conflits
       test: ["CMD-SHELL", "exit 0"]
-      start_period: 10s
+      start_period: 15s
       interval: 5s
       timeout: 10s
       retries: 5
 
   stock-consumer:
     container_name: stock-consumer
-    image: arthurescriou/stock-consumer:1.0.0
+    image: arthurescriou/stock-consumer:1.0.2
+    volumes:
+      - /home/christian/Documents/l3/opsci/projet2/stock-consumer/main.js:/main.js
     env_file: .env
     environment:
       BROKER_1: ${BROKER_1}
@@ -258,6 +260,42 @@ services:
         condition: service_started
       stock-consumer:
         condition: service_healthy
+
+  mqtt:
+    container_name: mqtt
+    image: eclipse-mosquitto
+    volumes:
+      - /home/christian/Documents/l3/opsci/projet2/mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf
+    ports:
+      - "1883:1883"
+    networks:
+      - kafka-network
+    healthcheck:
+      # On met un délai de 5 secondes pour que le container ait le temps d'etre 'healthy'
+      test: ["CMD-SHELL", "exit 0"]
+      start_period: 10s
+      interval: 5s
+      timeout: 10s
+      retries: 5
+ 
+  mqtt-kafka-connector:
+    container_name: mqtt-kafka-connector
+    image: arthurescriou/mqtt-kafka-connector:1.0.0
+    env_file: .env
+    environment:
+      BROKER_1: ${BROKER_1}
+      BROKER_2: ${BROKER_2}
+      BROKER_3: ${BROKER_3}
+      KAFKA_TOPIC: ${TOPIC_STOCK}
+      MQTT_TOPIC: 'stock'
+      MQTT_ENDPOINT: 'ws://mqtt:1883'
+    networks:
+      - kafka-network
+    depends_on:
+      mqtt:
+        condition: service_healthy
+      kafka:
+        condition: service_started
 
 volumes:
   strapi-data:
