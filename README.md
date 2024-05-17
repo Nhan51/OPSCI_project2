@@ -16,3 +16,5 @@ This deployment follows the initial setup (https://github.com/Nhan51/OPSCI_proje
 -  Event Consumer: Service consuming general events.
 -  Stock Consumer: Service handling stock-related events.
 -  Stock Producer: Service producing stock-related events.
+
+Merci Marine pour le soutient d'une partie du projet
